@@ -1,8 +1,11 @@
 package toon
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/devalexandre/toon-go/pkg/decoder"
@@ -58,6 +61,92 @@ type byteWriter struct {
 	buf *[]byte
 }
 
+// Encode serializa um objeto Go para o formato TOON como string
+func Encode(v interface{}) (string, error) {
+	// Detecta se é slice de map[string]interface{}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Map:
+		// Objeto simples
+		keys := make([]string, 0, rv.Len())
+		for _, k := range rv.MapKeys() {
+			keys = append(keys, fmt.Sprint(k.Interface()))
+		}
+		sort.Strings(keys)
+		var buf bytes.Buffer
+		for _, k := range keys {
+			fmt.Fprintf(&buf, "%s: %v\n", k, rv.MapIndex(reflect.ValueOf(k)).Interface())
+		}
+		return buf.String(), nil
+	case reflect.Struct:
+		// Struct simples
+		t := rv.Type()
+		var buf bytes.Buffer
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			value := rv.Field(i).Interface()
+			fmt.Fprintf(&buf, "%s: %v\n", field.Name, value)
+		}
+		return buf.String(), nil
+	case reflect.Slice:
+		if rv.Len() == 0 {
+			return "[]\n", nil
+		}
+		first := rv.Index(0)
+		// Tabular para slice de struct
+		if first.Kind() == reflect.Struct {
+			t := first.Type()
+			fields := make([]string, t.NumField())
+			for i := 0; i < t.NumField(); i++ {
+				fields[i] = t.Field(i).Name
+			}
+			var buf bytes.Buffer
+			fmt.Fprintf(&buf, "[%d,]{%s}:\n", rv.Len(), joinComma(fields))
+			for i := 0; i < rv.Len(); i++ {
+				row := rv.Index(i)
+				vals := make([]string, len(fields))
+				for j := range fields {
+					vals[j] = fmt.Sprint(row.Field(j).Interface())
+				}
+				fmt.Fprintf(&buf, "  %s\n", joinComma(vals))
+			}
+			return buf.String(), nil
+		}
+		// Tabular para slice de map[string]interface{}
+		if first.Kind() == reflect.Map {
+			fields := make([]string, 0, first.Len())
+			for _, k := range first.MapKeys() {
+				fields = append(fields, fmt.Sprint(k.Interface()))
+			}
+			sort.Strings(fields)
+			var buf bytes.Buffer
+			fmt.Fprintf(&buf, "[%d,]{%s}:\n", rv.Len(), joinComma(fields))
+			for i := 0; i < rv.Len(); i++ {
+				row := rv.Index(i)
+				vals := make([]string, len(fields))
+				for j, f := range fields {
+					v := row.MapIndex(reflect.ValueOf(f))
+					vals[j] = fmt.Sprint(v.Interface())
+				}
+				fmt.Fprintf(&buf, "  %s\n", joinComma(vals))
+			}
+			return buf.String(), nil
+		}
+		return "", fmt.Errorf("Tipo de slice não suportado para Encode: %s", first.Kind())
+	default:
+		return "", fmt.Errorf("Tipo não suportado para Encode: %s", rv.Kind())
+	}
+}
+
+func joinComma(arr []string) string {
+	return strings.Join(arr, ",")
+}
+
+// Decode desserializa uma string TOON para um objeto Go
+func Decode(data string, v interface{}) error {
+	return Unmarshal([]byte(data), v)
+}
+
 func (w *byteWriter) Write(p []byte) (n int, err error) {
 	*w.buf = append(*w.buf, p...)
 	return len(p), nil
@@ -97,7 +186,6 @@ func setFieldValue(dst, src reflect.Value) error {
 	if !dst.CanSet() {
 		return nil
 	}
-
 
 	switch dst.Kind() {
 	case reflect.Interface:
