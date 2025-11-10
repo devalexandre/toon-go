@@ -9,8 +9,8 @@ import (
 )
 
 type Parser struct {
-	scanner *bufio.Scanner
-	lineNum int
+	scanner  *bufio.Scanner
+	lineNum  int
 	lines    []string
 	linePos  int
 	hasLines bool
@@ -37,11 +37,23 @@ func (p *Parser) Parse() (interface{}, error) {
 	p.linePos = 0
 	p.hasLines = true
 
+	// Check if this is a root-level tabular array (starts with [count]{fields}:)
+	if len(lines) > 0 {
+		firstLine := strings.TrimSpace(lines[0])
+		if strings.HasPrefix(firstLine, "[") && strings.Contains(firstLine, "}:") {
+			// This is a root-level tabular array
+			array, err := p.parseRootTabularArray()
+			if err != nil {
+				return nil, err
+			}
+			return array, nil
+		}
+	}
+
 	minIndent := p.findMinIndent()
 
 	return p.parseObject(minIndent)
 }
-
 func (p *Parser) findMinIndent() int {
 	minIndent := -1
 	for _, line := range p.lines {
@@ -181,6 +193,7 @@ func (p *Parser) parseTabularArray(header string, indent int) (string, []interfa
 	}
 
 	countStr := headerPart[countStart:countEnd]
+	countStr = strings.TrimRight(countStr, ",") // Remove vírgula se existir
 	count, err := strconv.Atoi(countStr)
 	if err != nil {
 		return "", nil, fmt.Errorf("invalid count: %v", err)
@@ -218,7 +231,7 @@ func (p *Parser) parseTabularArray(header string, indent int) (string, []interfa
 			continue
 		}
 
-		values := strings.Fields(dataContent)
+		values := splitTabularValues(dataContent)
 
 		if len(values) != len(fields) {
 			return "", nil, fmt.Errorf("row %d: field count mismatch (expected %d, got %d)",
@@ -231,7 +244,7 @@ func (p *Parser) parseTabularArray(header string, indent int) (string, []interfa
 	}
 
 	if rowCount != count {
-		return "", nil, fmt.Errorf("array count mismatch: declared %d, found %d", count, rowCount)
+		return name, nil, fmt.Errorf("array count mismatch: declared %d, found %d", count, rowCount)
 	}
 
 	array := make([]interface{}, len(rows))
@@ -245,7 +258,6 @@ func (p *Parser) parseTabularArray(header string, indent int) (string, []interfa
 
 	return name, array, nil
 }
-
 func (p *Parser) parseRegularArray(header string, indent int) (string, []interface{}, error) {
 	colonIndex := strings.Index(header, ":")
 	if colonIndex == -1 {
@@ -297,23 +309,12 @@ func (p *Parser) parseRegularArray(header string, indent int) (string, []interfa
 				break
 			}
 
-			dataContent := strings.TrimSpace(rowLine[rowIndent:])
-			if dataContent == "" {
-				p.linePos++
-				continue
-			}
-
-			valueStrings := strings.Fields(dataContent)
-			for _, valueStr := range valueStrings {
-				if valueCount >= count {
-					break
-				}
-				trimmed := strings.TrimSpace(valueStr)
-				values = append(values, p.parsePrimitive(trimmed))
-				valueCount++
-			}
-
+			valueCount++
 			p.linePos++
+		}
+
+		if valueCount != count {
+			return name, nil, fmt.Errorf("array count mismatch: declared %d, found %d", count, valueCount)
 		}
 	}
 
@@ -323,7 +324,6 @@ func (p *Parser) parseRegularArray(header string, indent int) (string, []interfa
 
 	return name, values, nil
 }
-
 func (p *Parser) parsePrimitive(value string) interface{} {
 	trimmed := strings.TrimSpace(value)
 
@@ -350,4 +350,102 @@ func (p *Parser) parsePrimitive(value string) interface{} {
 	}
 
 	return trimmed
+}
+
+// parseRootTabularArray parses a tabular array that is at the root level (no name)
+func (p *Parser) parseRootTabularArray() ([]interface{}, error) {
+	if len(p.lines) == 0 {
+		return nil, fmt.Errorf("no lines to parse")
+	}
+
+	// Parse the header line: [3]{Name,Age,Email,Active}:
+	headerLine := strings.TrimSpace(p.lines[0])
+	colonIndex := strings.Index(headerLine, "}:")
+	if colonIndex == -1 {
+		return nil, fmt.Errorf("invalid tabular array format")
+	}
+
+	headerPart := headerLine[:colonIndex+1]
+
+	// Extract count [3]
+	countStart := 1 // Skip '['
+	countEnd := strings.Index(headerPart, "]")
+	if countEnd == -1 {
+		return nil, fmt.Errorf("invalid tabular array format: missing closing bracket")
+	}
+
+	countStr := headerPart[countStart:countEnd]
+	count, err := strconv.Atoi(countStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid count: %v", err)
+	}
+
+	// Extract fields {Name,Age,Email,Active}
+	fieldsStart := countEnd + 2 // Skip ']{'
+	if fieldsStart >= len(headerPart) || headerPart[fieldsStart-1] != '{' {
+		return nil, fmt.Errorf("invalid tabular array format: missing fields")
+	}
+
+	fieldsStr := headerPart[fieldsStart : len(headerPart)-1] // Exclude '}'
+	fields := strings.Split(fieldsStr, ",")
+	for i := range fields {
+		fields[i] = strings.TrimSpace(fields[i])
+	}
+
+	// Parse rows starting from line 1 (after header)
+	var rows [][]string
+	rowCount := 0
+	lineIndex := 1 // Start after header line
+
+	for lineIndex < len(p.lines) && rowCount < count {
+		rowLine := p.lines[lineIndex]
+		dataContent := strings.TrimSpace(rowLine)
+
+		if dataContent == "" {
+			lineIndex++
+			continue
+		}
+
+		// Skip lines that look like end markers
+		if dataContent == "[]" {
+			lineIndex++
+			continue
+		}
+
+		values := splitTabularValues(dataContent)
+
+		if len(values) != len(fields) {
+			return nil, fmt.Errorf("row %d: field count mismatch (expected %d, got %d)",
+				rowCount+1, len(fields), len(values))
+		}
+
+		rows = append(rows, values)
+		rowCount++
+		lineIndex++
+	}
+
+	if rowCount != count {
+		return nil, fmt.Errorf("array count mismatch: declared %d, found %d", count, rowCount)
+	}
+
+	// Convert to array of objects
+	array := make([]interface{}, len(rows))
+	for i, row := range rows {
+		obj := make(map[string]interface{})
+		for j, field := range fields {
+			obj[field] = p.parsePrimitive(row[j])
+		}
+		array[i] = obj
+	}
+
+	return array, nil
+}
+
+// splitTabularValues divide uma linha tabular por vírgula, removendo espaços extras
+func splitTabularValues(line string) []string {
+	parts := strings.Split(line, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
 }

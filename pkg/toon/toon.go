@@ -101,7 +101,7 @@ func Encode(v interface{}) (string, error) {
 				fields[i] = t.Field(i).Name
 			}
 			var buf bytes.Buffer
-			fmt.Fprintf(&buf, "[%d,]{%s}:\n", rv.Len(), joinComma(fields))
+			fmt.Fprintf(&buf, "[%d]{%s}:\n", rv.Len(), joinComma(fields))
 			for i := 0; i < rv.Len(); i++ {
 				row := rv.Index(i)
 				vals := make([]string, len(fields))
@@ -120,7 +120,7 @@ func Encode(v interface{}) (string, error) {
 			}
 			sort.Strings(fields)
 			var buf bytes.Buffer
-			fmt.Fprintf(&buf, "[%d,]{%s}:\n", rv.Len(), joinComma(fields))
+			fmt.Fprintf(&buf, "[%d]{%s}:\n", rv.Len(), joinComma(fields))
 			for i := 0; i < rv.Len(); i++ {
 				row := rv.Index(i)
 				vals := make([]string, len(fields))

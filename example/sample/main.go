@@ -15,11 +15,10 @@ type Person struct {
 }
 
 func main() {
-	// Struct simples
+
 	fmt.Println("=== TOON Format Example ===")
 	fmt.Println()
 
-	// Exemplo: slice de structs
 	people := []Person{
 		{Name: "John Doe", Age: 30, Email: "john.doe@example.com", Active: true},
 		{Name: "Alice Smith", Age: 28, Email: "alice.smith@example.com", Active: true},
@@ -33,7 +32,13 @@ func main() {
 	}
 	fmt.Print(str)
 
-	// Exemplo: struct simples
+	var peopleDecoded []Person
+	err = toon.Decode(str, &peopleDecoded)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%+v\n", peopleDecoded)
+
 	fmt.Println("\n# Simple object (struct)")
 	person := Person{Name: "Alice", Age: 30, Email: "alice@example.com", Active: true}
 	str, err = toon.Encode(person)
@@ -41,4 +46,12 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Print(str)
+
+	fmt.Println("\n# Decode example")
+	person = Person{}
+	err = toon.Decode(str, &person)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%+v\n", person)
 }
